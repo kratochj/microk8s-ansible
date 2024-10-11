@@ -1,0 +1,286 @@
+---
+- name: Configure server, install MicroK8s, and deploy Kubernetes manifests
+  hosts: all
+  remote_user: root
+  become: yes
+
+  vars:
+    domain_name: "lab2.kratochvil.cloud"  # Replace with your actual domain
+    swap_file: "{{ lookup('ansible.builtin.stat', '/swapfile', get_attributes=True) }}"
+    fstab_backup: "{{ lookup('ansible.builtin.stat', '/etc/fstab.bak', get_attributes=True) }}"
+    admin_token: "{{ lookup('password', '/dev/null chars=ascii_letters,digits length=32') }}"
+    mysql_root_password: "{{ lookup('password', '/dev/null chars=ascii_letters,digits length=16') }}"
+    ansible_python_interpreter: /usr/bin/python3
+
+  vars_files:
+  - namespaces.yaml
+
+  tasks:
+    - name: Ensure python3 and python3-pip are installed (Debian/Ubuntu)
+      apt:
+        name:
+          - python3
+          - python3-pip
+        state: present
+      when: ansible_os_family == 'Debian'
+
+    - name: Install Kubernetes Python client via apt
+      apt:
+        name: python3-kubernetes
+        state: present
+      become: yes
+      when: ansible_os_family == 'Debian'
+
+
+    - name: Check if swap file exists
+      stat:
+        path: /swapfile
+      register: swap_file
+
+    - name: Check if fstab backup exists
+      stat:
+        path: /etc/fstab.bak
+      register: fstab_backup
+
+    - name: Ensure swap is enabled
+      block:
+        - name: Create a swap file
+          shell: fallocate -l 2G /swapfile
+          args:
+            creates: /swapfile
+          when: not swap_file.stat.exists
+
+        - name: Set swap file permissions
+          file:
+            path: /swapfile
+            mode: '0600'
+            owner: root
+            group: root
+
+        - name: Setup swap area
+          command: mkswap /swapfile
+          args:
+            creates: /swapfile
+
+        - name: Enable swap file
+          command: swapon /swapfile
+          args:
+            creates: /proc/swaps
+
+        - name: Backup fstab
+          copy:
+            src: /etc/fstab
+            dest: /etc/fstab.bak
+            remote_src: yes
+            owner: root
+            group: root
+            mode: '0644'
+          when: not fstab_backup.stat.exists
+
+        - name: Add swap entry to fstab
+          lineinfile:
+            path: /etc/fstab
+            line: '/swapfile none swap sw 0 0'
+            state: present
+
+    - name: Create a swap file
+      shell: fallocate -l 2G /swapfile
+      args:
+        creates: /swapfile
+      when: swap_file.stat.exists == False
+
+    - name: Set swap file permissions
+      file:
+        path: /swapfile
+        mode: '0600'
+        owner: root
+        group: root
+
+    - name: Setup swap area
+      command: mkswap /swapfile
+      args:
+        creates: /swapfile
+
+    - name: Enable swap file
+      command: swapon /swapfile
+      args:
+        creates: /proc/swaps
+
+    - name: Backup fstab
+      copy:
+        src: /etc/fstab
+        dest: /etc/fstab.bak
+        remote_src: yes
+        owner: root
+        group: root
+        mode: '0644'
+      when: fstab_backup.stat.exists == False
+
+    - name: Add swap entry to fstab
+      lineinfile:
+        path: /etc/fstab
+        line: '/swapfile none swap sw 0 0'
+        state: present
+
+    - name: Install Kubernetes Python client on remote host
+      pip:
+        name: kubernetes
+        state: present
+      become: yes
+      when: kubernetes_python_check is defined and kubernetes_python_check.rc != 0
+
+    - name: Check if do-agent service is active
+      shell: systemctl is-active do-agent
+      register: do_agent_service_status
+      failed_when: false
+      changed_when: false
+
+    - name: Run DigitalOcean Insights install script
+      shell: curl -sSL https://repos.insights.digitalocean.com/install.sh | bash
+      when: do_agent_service_status.stdout != 'active'
+
+    - name: Ensure snapd is installed (for Debian-based systems)
+      apt:
+        name: snapd
+        state: present
+      when: ansible_os_family == 'Debian'
+
+    - name: Install MicroK8s via snap
+      snap:
+        name: microk8s
+        classic: yes
+        state: present
+
+    - name: Wait for MicroK8s to be ready
+      shell: microk8s status --wait-ready
+      args:
+        executable: /bin/bash
+      environment:
+        PATH: "/snap/bin:{{ ansible_env.PATH }}"
+
+    - name: Enable MicroK8s addons
+      shell: microk8s enable cert-manager helm3 hostpath-storage ingress observability rbac
+      args:
+        executable: /bin/bash
+      environment:
+        PATH: "/snap/bin:{{ ansible_env.PATH }}"
+
+    - name: Create Kubernetes namespaces
+      k8s:
+        state: present
+        definition:
+          apiVersion: v1
+          kind: Namespace
+          metadata:
+            name: "{{ item }}"
+      loop: "{{ namespaces }}"
+      environment:
+        KUBECONFIG: "/var/snap/microk8s/current/credentials/client.config"
+        PATH: "/snap/bin:{{ ansible_env.PATH }}"
+
+    - name: Generate Kubernetes secrets with random keys
+      block:
+        - name: Check if vaultwarden-admin-token secret exists
+          k8s_info:
+            api_version: v1
+            kind: Secret
+            namespace: bitwarden
+            name: vaultwarden-admin-token
+          register: vaultwarden_secret_info
+          environment:
+            KUBECONFIG: "/var/snap/microk8s/current/credentials/client.config"
+            PATH: "/snap/bin:{{ ansible_env.PATH }}"
+
+        - name: Create vaultwarden-admin-token secret
+          k8s:
+            state: present
+            definition:
+              apiVersion: v1
+              kind: Secret
+              metadata:
+                name: vaultwarden-admin-token
+                namespace: bitwarden
+              type: Opaque
+              data:
+                ADMIN_TOKEN: "{{ admin_token | b64encode }}"
+          when: vaultwarden_secret_info.resources | length == 0
+          environment:
+            KUBECONFIG: "/var/snap/microk8s/current/credentials/client.config"
+            PATH: "/snap/bin:{{ ansible_env.PATH }}"
+
+    - name: Check if mysql-secret exists
+      k8s_info:
+        api_version: v1
+        kind: Secret
+        namespace: blog
+        name: mysql-secret
+      register: mysql_secret_info
+      environment:
+        KUBECONFIG: "/var/snap/microk8s/current/credentials/client.config"
+        PATH: "/snap/bin:{{ ansible_env.PATH }}"
+
+    - name: Create mysql-secret
+      k8s:
+        state: present
+        definition:
+          apiVersion: v1
+          kind: Secret
+          metadata:
+            name: mysql-secret
+            namespace: blog
+          type: Opaque
+          data:
+            MYSQL_ROOT_PASSWORD: "{{ mysql_root_password | b64encode }}"
+      when: mysql_secret_info.resources | length == 0
+      environment:
+        KUBECONFIG: "/var/snap/microk8s/current/credentials/client.config"
+        PATH: "/snap/bin:{{ ansible_env.PATH }}"
+
+    - name: Create temporary directory for processed manifests
+      tempfile:
+        state: directory
+        prefix: processed_manifests_
+      register: temp_manifest_dir
+      delegate_to: localhost
+      become: no
+
+    - name: Copy manifests to temporary directory
+      copy:
+        src: deployments/
+        dest: "{{ temp_manifest_dir.path }}/"
+        mode: '0644'
+      delegate_to: localhost
+      become: no
+
+    - name: Replace domain in manifests
+      replace:
+        path: "{{ item }}"
+        regexp: 'lab\.kratochvil\.cloud'
+        replace: "{{ domain_name }}"
+      loop: "{{ lookup('fileglob', temp_manifest_dir.path + '/*.yaml', wantlist=True) }}"
+      loop_control:
+        label: "{{ item | basename }}"
+      delegate_to: localhost
+      become: no
+
+    - name: Copy processed manifests to the server
+      copy:
+        src: "{{ temp_manifest_dir.path }}/"
+        dest: /tmp/deployments/
+        mode: '0644'
+
+    - name: Apply Kubernetes manifests
+      shell: microk8s kubectl apply -f /tmp/deployments/
+      args:
+        executable: /bin/bash
+      environment:
+        PATH: "/snap/bin:{{ ansible_env.PATH }}"
+
+    - name: Remove temporary directory
+      file:
+        path: "{{ temp_manifest_dir.path }}"
+        state: absent
+      delegate_to: localhost
+      become: no
+
+
