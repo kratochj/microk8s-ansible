@@ -54,7 +54,6 @@ project-directory/
 │   ├── all.yml
 │   ├── master.yml
 │   ├── workers.yml
-├── namespaces.yaml
 ├── deployments/
 │   └── *.yaml
 └── README.md
@@ -91,19 +90,6 @@ project-directory/
 - **`admin_token`**: Randomly generated 32-character admin token.
 - **`mysql_root_password`**: Randomly generated 16-character MySQL root password.
 - **`ansible_python_interpreter`**: Path to the Python 3 interpreter on the target hosts (default: `"/usr/bin/python3"`).
-
-### Variables Loaded from Files
-
-- **`namespaces.yaml`**: Contains the list of Kubernetes namespaces to create.
-
-  ```yaml
-  ---
-  namespaces:
-    - bitwarden
-    - blog
-    - monitoring
-    - another-namespace
-  ```
 
 ### Group Variables
 
