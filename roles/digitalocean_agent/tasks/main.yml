@@ -1,0 +1,7 @@
+- name: Install DigitalOcean Agent if not running
+  shell: |
+    if ! systemctl is-active --quiet do-agent; then
+      curl -sSL https://repos.insights.digitalocean.com/install.sh | bash
+    fi
+  args:
+    executable: /bin/bash

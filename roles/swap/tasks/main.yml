@@ -1,0 +1,50 @@
+- name: Check if swap file exists
+  stat:
+    path: /swapfile
+  register: swap_file
+
+- name: Check if fstab backup exists
+  stat:
+    path: /etc/fstab.bak
+  register: fstab_backup
+
+- name: Ensure swap is enabled
+  block:
+    - name: Create a swap file
+      shell: fallocate -l 2G /swapfile
+      args:
+        creates: /swapfile
+      when: not swap_file.stat.exists
+
+    - name: Set swap file permissions
+      file:
+        path: /swapfile
+        mode: '0600'
+        owner: root
+        group: root
+
+    - name: Setup swap area
+      command: mkswap /swapfile
+      args:
+        creates: /swapfile
+
+    - name: Enable swap file
+      command: swapon /swapfile
+      args:
+        creates: /proc/swaps
+
+    - name: Backup fstab
+      copy:
+        src: /etc/fstab
+        dest: /etc/fstab.bak
+        remote_src: yes
+        owner: root
+        group: root
+        mode: '0644'
+      when: not fstab_backup.stat.exists
+
+    - name: Add swap entry to fstab
+      lineinfile:
+        path: /etc/fstab
+        line: '/swapfile none swap sw 0 0'
+        state: present

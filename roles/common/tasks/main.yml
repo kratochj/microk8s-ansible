@@ -1,0 +1,19 @@
+- name: Ensure python3 and python3-pip are installed (Debian/Ubuntu)
+  apt:
+    name:
+      - python3
+      - python3-pip
+    state: present
+  when: ansible_os_family == 'Debian'
+
+- name: Ensure snapd is installed (Debian/Ubuntu)
+  apt:
+    name: snapd
+    state: present
+  when: ansible_os_family == 'Debian'
+
+- name: Install Kubernetes Python client via apt
+  apt:
+    name: python3-kubernetes
+    state: present
+  when: ansible_os_family == 'Debian'
