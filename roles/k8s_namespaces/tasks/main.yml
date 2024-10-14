@@ -1,0 +1,13 @@
+---
+- name: Create Kubernetes namespaces
+  k8s:
+    state: present
+    definition:
+      apiVersion: v1
+      kind: Namespace
+      metadata:
+        name: "{{ item }}"
+  loop: "{{ namespaces }}"
+  environment:
+    KUBECONFIG: "/var/snap/microk8s/current/credentials/client.config"
+    PATH: "/snap/bin:{{ ansible_env.PATH }}"
