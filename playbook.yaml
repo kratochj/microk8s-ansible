@@ -3,8 +3,8 @@
   hosts: master
   become: yes
 
-  vars_files:
-    - namespaces.yaml
+#  vars_files:
+#    - namespaces.yaml
 
   roles:
     - digitalocean_agent
